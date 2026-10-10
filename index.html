@@ -7,116 +7,109 @@
 <title>Mini AI Buddy</title>
 
 <style>
-  * { box-sizing: border-box; }
+* { box-sizing: border-box; }
 
-  body {
-    background: #07111f;
-    color: #e5faff;
-    font-family: Arial, sans-serif;
-    max-width: 520px;
-    margin: 25px auto;
-    padding: 16px;
-  }
+body {
+  background: #07111f;
+  color: #e5faff;
+  font-family: Arial, sans-serif;
+  max-width: 520px;
+  margin: 25px auto;
+  padding: 16px;
+}
 
-  h1 {
-    color: #67e8f9;
-    text-align: center;
-  }
+h1 { color: #67e8f9; text-align: center; }
 
-  .subtitle {
-    color: #9fb8ca;
-    text-align: center;
-    font-size: 14px;
-  }
+.subtitle {
+  text-align: center;
+  color: #9fb8ca;
+}
 
-  input, button, select {
-    width: 100%;
-    padding: 13px;
-    margin: 7px 0;
-    border-radius: 10px;
-    border: 1px solid #31516b;
-    font-size: 16px;
-  }
+input, button {
+  width: 100%;
+  padding: 13px;
+  margin: 7px 0;
+  border-radius: 10px;
+  border: 1px solid #31516b;
+  font-size: 16px;
+}
 
-  input {
-    background: #102238;
-    color: white;
-  }
+input { background: #102238; color: white; }
 
-  button {
-    background: #0891b2;
-    color: white;
-    font-weight: bold;
-    cursor: pointer;
-  }
+button {
+  background: #0891b2;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}
 
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+button:disabled { opacity: 0.5; }
 
-  #log {
-    background: #102238;
-    border: 1px solid #31516b;
-    border-radius: 12px;
-    padding: 15px;
-    min-height: 140px;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    line-height: 1.6;
-    margin-top: 12px;
-  }
+#status {
+  text-align: center;
+  color: #67e8f9;
+  margin: 12px;
+}
 
-  #status {
-    color: #67e8f9;
-    text-align: center;
-    margin: 12px 0;
-    font-size: 14px;
-  }
+#log {
+  background: #102238;
+  border: 1px solid #31516b;
+  border-radius: 12px;
+  padding: 15px;
+  min-height: 140px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
 
-  .small {
-    color: #9fb8ca;
-    font-size: 12px;
-    line-height: 1.5;
-  }
+.small {
+  color: #9fb8ca;
+  font-size: 12px;
+  line-height: 1.5;
+}
 </style>
 </head>
 
 <body>
-
 <h1>🤖 Mini AI Buddy</h1>
 <p class="subtitle">Your little AI companion</p>
 
-<input
-  id="apiKey"
-  type="password"
-  placeholder="Paste your NEW Gemini API key"
-  autocomplete="off"
->
+<input id="apiKey" type="password"
+       placeholder="Paste your replacement Gemini API key"
+       autocomplete="off">
 
-<button onclick="connectBLE()">1. Connect TFT 📟</button>
-<button onclick="startListening()">2. Talk to Buddy 🎤</button>
-<button onclick="disconnectBuddy()">Disconnect Bluetooth</button>
+<button id="connectBtn" onclick="connectBLE()">
+  1. Connect TFT 📟
+</button>
+
+<button id="talkBtn" onclick="startListening()">
+  2. Talk to Buddy 🎤
+</button>
+
+<button onclick="disconnectBuddy()">
+  Disconnect Bluetooth
+</button>
 
 <div id="status">Not connected</div>
-<div id="log">Welcome! Connect your TFT and then talk to me.</div>
+<div id="log">Connect your TFT, then tap Talk to Buddy.</div>
 
 <p class="small">
-  Use Chrome on Android with an HTTPS webpage.
-  Bluetooth and microphone permissions are required.
+  Open this page in Chrome on Android using HTTPS.
+  Allow microphone access when prompted.
 </p>
 
 <script>
 "use strict";
 
-// ESP32 BLE UUIDs
+// Keep these UUIDs identical to the ESP32 sketch.
 const SERVICE_UUID =
   "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 
 const RX_UUID =
   "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
-// Use a model available to your Gemini API key.
+// Current model name. If unavailable, use a model listed
+// by your Gemini API key that supports generateContent.
 const GEMINI_MODEL = "gemini-3.8-flash";
 
 let bluetoothDevice = null;
@@ -126,7 +119,7 @@ let busy = false;
 let recognition = null;
 let requestNumber = 0;
 
-// ---------- UI ----------
+// ---------- DISPLAY HELPERS ----------
 
 function log(message) {
   document.getElementById("log").textContent = message;
@@ -147,7 +140,6 @@ async function sendBLE(message) {
 
   const bytes = new TextEncoder().encode(message);
 
-  // Keep writes compatible with the ESP32 sketch.
   if (bytes.length > 20) {
     throw new Error("Bluetooth message exceeds 20 bytes.");
   }
@@ -162,14 +154,16 @@ async function sendBLE(message) {
 }
 
 async function sendStatus(status) {
-  if (!characteristic) return;
-  await sendBLE("STATUS:" + status);
+  if (characteristic) {
+    await sendBLE("STATUS:" + status);
+  }
 }
 
 async function sendLines(text) {
   if (!characteristic) return;
 
-  // Send short ASCII-friendly lines to the TFT.
+  // The ESP32 currently accepts short LINE messages.
+  // Each new LINE may replace the previous TFT text.
   const words = text
     .replace(/[^\x20-\x7E]/g, "")
     .split(/\s+/);
@@ -179,27 +173,26 @@ async function sendLines(text) {
   for (const word of words) {
     if (!word) continue;
 
-    const candidate = line ? line + " " + word : word;
+    if ((line ? line + " " : "") .length + word.length > 14) {
+      if (line) await sendBLE("LINE:" + line);
+      line = "";
+    }
 
-    if (candidate.length > 14) {
+    // Split any unusually long word.
+    let remaining = word;
+
+    while (remaining.length > 14) {
       if (line) {
         await sendBLE("LINE:" + line);
-      }
-
-      // Break an unusually long word safely.
-      line = word.slice(0, 14);
-
-      if (word.length > 14) {
-        await sendBLE("LINE:" + line);
-
-        for (let i = 14; i < word.length; i += 14) {
-          await sendBLE("LINE:" + word.slice(i, i + 14));
-        }
-
         line = "";
       }
-    } else {
-      line = candidate;
+
+      await sendBLE("LINE:" + remaining.slice(0, 14));
+      remaining = remaining.slice(14);
+    }
+
+    if (remaining) {
+      line = line ? line + " " + remaining : remaining;
     }
   }
 
@@ -212,16 +205,18 @@ async function connectBLE() {
   try {
     if (!navigator.bluetooth) {
       throw new Error(
-        "Web Bluetooth is unavailable. Open this page in Chrome on Android using HTTPS."
+        "Web Bluetooth is unavailable. Open this page in Chrome using HTTPS."
       );
     }
 
-    setStatus("Searching for MiniAIBuddy...");
+    setStatus("Opening Bluetooth selector...");
 
     bluetoothDevice = await navigator.bluetooth.requestDevice({
       filters: [{ name: "MiniAIBuddy" }],
       optionalServices: [SERVICE_UUID]
     });
+
+    setStatus("Connecting to " + bluetoothDevice.name + "...");
 
     bluetoothDevice.addEventListener(
       "gattserverdisconnected",
@@ -232,21 +227,18 @@ async function connectBLE() {
     );
 
     const server = await bluetoothDevice.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
 
-    const service =
-      await server.getPrimaryService(SERVICE_UUID);
-
-    characteristic =
-      await service.getCharacteristic(RX_UUID);
+    characteristic = await service.getCharacteristic(RX_UUID);
 
     setStatus("Connected to MiniAIBuddy!");
-    log("Bluetooth connected!\nAsk me anything.");
+    log("TFT connected successfully. Ask me anything!");
 
     await sendStatus("READY");
 
   } catch (error) {
     setStatus("Bluetooth connection failed");
-    log("Bluetooth error:\n" + error.message);
+    log("Bluetooth error: " + error.message);
   }
 }
 
@@ -259,53 +251,39 @@ function disconnectBuddy() {
   setStatus("Disconnected");
 }
 
-// ---------- GEMINI AI ----------
+// ---------- GEMINI REQUEST ----------
 
-async function askGemini(question) {
-  const key =
-    document.getElementById("apiKey").value.trim();
+async function generateGemini(contents) {
+  const key = document.getElementById("apiKey").value.trim();
 
   if (!key) {
     throw new Error("Enter your Gemini API key first.");
   }
 
-  const contents = [
-    ...history,
-    {
-      role: "user",
-      parts: [{ text: question }]
-    }
-  ];
-
   const url =
     "https://generativelanguage.googleapis.com/v1beta/models/" +
-    GEMINI_MODEL +
-    ":generateContent";
+    GEMINI_MODEL + ":generateContent";
 
   const response = await fetch(url, {
     method: "POST",
-
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": key
     },
-
     body: JSON.stringify({
       systemInstruction: {
         parts: [{
           text:
-            "You are Mini AI Buddy, a friendly and intelligent " +
-            "robot companion. Answer the user's actual question " +
-            "directly in natural, simple English. Be warm and " +
-            "helpful. Keep most replies under 40 words. " +
-            "Never answer only 'beep boop' unless specifically asked."
+            "You are Mini AI Buddy, a friendly, intelligent robot " +
+            "companion. Answer the user's actual question in simple, " +
+            "natural English. Usually use two to four complete sentences. " +
+            "Finish every sentence and thought. Avoid unnecessary " +
+            "introductions. Never answer only 'beep boop' unless asked."
         }]
       },
-
       contents: contents,
-
       generationConfig: {
-        maxOutputTokens: 180,
+        maxOutputTokens: 512,
         temperature: 0.7
       }
     })
@@ -316,65 +294,108 @@ async function askGemini(question) {
   try {
     data = await response.json();
   } catch {
-    throw new Error("The Gemini server returned an invalid response.");
+    throw new Error("Gemini returned an invalid response.");
   }
 
   if (!response.ok) {
-    const apiMessage =
-      data.error?.message || "Unknown Gemini API error";
-
-    if (response.status === 400) {
-      throw new Error("Invalid request or model name: " + apiMessage);
-    }
+    const message = data.error?.message || "Unknown API error";
 
     if (response.status === 401 || response.status === 403) {
-      throw new Error("API key rejected or access denied: " + apiMessage);
+      throw new Error("API key rejected or access denied: " + message);
     }
 
     if (response.status === 404) {
       throw new Error(
-        "Model not found. Check available models for your API key."
+        "Model not found. Check GEMINI_MODEL against the models " +
+        "available to your API key."
       );
     }
 
     if (response.status === 429) {
-      throw new Error(
-        "Gemini request limit reached. Check your API quota."
-      );
+      throw new Error("Gemini quota or rate limit reached.");
     }
 
-    throw new Error(
-      "Gemini HTTP " + response.status + ": " + apiMessage
-    );
-  }
-
-  if (data.promptFeedback?.blockReason) {
-    throw new Error(
-      "Gemini blocked this prompt: " +
-      data.promptFeedback.blockReason
-    );
+    throw new Error("Gemini HTTP " + response.status + ": " + message);
   }
 
   const candidate = data.candidates?.[0];
-
-  const answer = candidate?.content?.parts
+  const text = candidate?.content?.parts
     ?.map(part => part.text || "")
     .join("")
     .trim();
 
-  if (!answer) {
+  if (!text) {
     throw new Error(
       "Gemini returned no text. Finish reason: " +
       (candidate?.finishReason || "unknown")
     );
   }
 
+  return {
+    text: text,
+    finishReason: candidate?.finishReason || "UNKNOWN"
+  };
+}
+
+// Ask Gemini and continue if its answer hits the output limit.
+async function askGemini(question) {
+  const cleanQuestion = question.trim();
+
+  if (!cleanQuestion) {
+    throw new Error("I couldn't hear your question. Please try again.");
+  }
+
+  const contents = [
+    ...history,
+    {
+      role: "user",
+      parts: [{ text: cleanQuestion }]
+    }
+  ];
+
+  let result = await generateGemini(contents);
+  let answer = result.text;
+  let attempts = 0;
+
+  // Continue only when Gemini explicitly reports MAX_TOKENS.
+  while (result.finishReason === "MAX_TOKENS" && attempts < 2) {
+    attempts++;
+
+    const continuationContents = [
+      ...contents,
+      {
+        role: "model",
+        parts: [{ text: answer }]
+      },
+      {
+        role: "user",
+        parts: [{
+          text:
+            "Continue exactly where your previous response ended. " +
+            "Do not repeat any text already provided. Finish the " +
+            "incomplete sentence and complete the answer concisely."
+        }]
+      }
+    ];
+
+    result = await generateGemini(continuationContents);
+
+    const nextPart = result.text.trim();
+
+    if (nextPart) {
+      answer += " " + nextPart;
+    }
+  }
+
+  if (result.finishReason === "MAX_TOKENS") {
+    console.warn("Gemini may have reached its output limit.");
+  }
+
   history.push(
-    { role: "user", parts: [{ text: question }] },
+    { role: "user", parts: [{ text: cleanQuestion }] },
     { role: "model", parts: [{ text: answer }] }
   );
 
-  // Keep recent conversation context.
   if (history.length > 10) {
     history = history.slice(-10);
   }
@@ -394,35 +415,29 @@ function speakAnswer(answer) {
     speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(answer);
-
     utterance.lang = "en-IN";
-    utterance.rate = 1;
-    utterance.pitch = 1.1;
+    utterance.rate = 0.95;
+    utterance.pitch = 1.08;
 
     utterance.onend = resolve;
-    utterance.onerror = resolve;
+    utterance.onerror = event => {
+      console.warn("Speech synthesis:", event.error);
+      resolve();
+    };
 
     speechSynthesis.speak(utterance);
   });
 }
 
-// ---------- VOICE INPUT ----------
+// ---------- SPEECH INPUT ----------
 
 async function startListening() {
-  if (busy) {
-    log("Please wait for the current response to finish.");
-    return;
-  }
-
   const SpeechRecognition =
     window.SpeechRecognition ||
     window.webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    log(
-      "Speech recognition is unavailable in this browser. " +
-      "Try Google Chrome on Android."
-    );
+    log("Speech recognition is unavailable. Try Chrome on Android.");
     return;
   }
 
@@ -432,12 +447,16 @@ async function startListening() {
   }
 
   if (!document.getElementById("apiKey").value.trim()) {
-    log("Please enter your Gemini API key first.");
+    log("Enter your Gemini API key first.");
+    return;
+  }
+
+  if (busy) {
+    log("Please wait for the current answer to finish.");
     return;
   }
 
   recognition = new SpeechRecognition();
-
   recognition.lang = "en-IN";
   recognition.continuous = false;
   recognition.interimResults = false;
@@ -450,13 +469,12 @@ async function startListening() {
     try {
       await sendStatus("LISTENING");
     } catch (error) {
-      console.error("TFT status error:", error);
+      console.warn(error);
     }
   };
 
   recognition.onerror = async event => {
     setStatus("Microphone error");
-
     log(
       "Speech recognition error: " + event.error +
       "\n\nCheck microphone permission and internet connection."
@@ -464,22 +482,19 @@ async function startListening() {
 
     try {
       await sendStatus("READY");
-    } catch (error) {
-      console.error(error);
-    }
+    } catch {}
   };
 
   recognition.onresult = async event => {
-    const question =
-      event.results[0][0].transcript.trim();
+    const question = event.results[0][0].transcript.trim();
 
     if (!question) {
       log("I didn't hear anything. Please try again.");
       return;
     }
 
-    const thisRequest = ++requestNumber;
     busy = true;
+    const currentRequest = ++requestNumber;
 
     try {
       setStatus("Thinking...");
@@ -487,49 +502,49 @@ async function startListening() {
 
       await sendStatus("THINKING");
 
-      // Ask the actual Gemini API.
       const answer = await askGemini(question);
 
-      if (thisRequest !== requestNumber) return;
+      if (currentRequest !== requestNumber) return;
 
+      // Show the full answer on the phone.
       log("You: " + question + "\n\nBuddy: " + answer);
 
-      // Display the actual answer on the TFT.
-      await sendLines(answer);
+      // Send answer text to the TFT.
+      try {
+        await sendLines(answer);
+      } catch (error) {
+        console.warn("TFT text error:", error);
+      }
 
-      setStatus("Buddy is speaking...");
+      setStatus("Speaking...");
       await sendStatus("SPEAKING");
 
-      // Speak the actual Gemini answer.
+      // Speak the full combined answer, not only the first chunk.
       await speakAnswer(answer);
 
       setStatus("Ready to talk");
-
       await sendStatus("READY");
 
     } catch (error) {
-      console.error("Mini AI Buddy error:", error);
+      console.error("Mini AI Buddy:", error);
 
       log(
-        "Sorry, I couldn't answer.\n\n" +
-        "Error: " + error.message +
-        "\n\nCheck the API key, model name, and internet connection."
+        "Sorry, I couldn't answer.\n\nError: " + error.message
       );
 
       setStatus("Request failed");
 
       try {
         await sendStatus("READY");
-      } catch (ignored) {}
+      } catch {}
+
     } finally {
       busy = false;
     }
   };
 
   recognition.onend = () => {
-    if (!busy && !speechSynthesis.speaking) {
-      setStatus("Ready to talk");
-    }
+    if (!busy) setStatus("Ready to talk");
   };
 
   try {
@@ -539,6 +554,5 @@ async function startListening() {
   }
 }
 </script>
-
 </body>
 </html>
