@@ -1,249 +1,152 @@
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mini AI Buddy</title>
-<style>
-  body {
-    background: #07111f;
-    color: #e5faff;
-    font-family: Arial, sans-serif;
-    max-width: 520px;
-    margin: 25px auto;
-    padding: 16px;
-  }
-  h1 { color: #67e8f9; }
-  input, button {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 13px;
-    margin: 7px 0;
-    border-radius: 10px;
-    border: 1px solid #31516b;
-    font-size: 16px;
-  }
-  input { background: #102238; color: white; }
-  button {
-    background: #0891b2;
-    color: white;
-    font-weight: bold;
-  }
-  #log {
-    background: #102238;
-    border-radius: 12px;
-    padding: 15px;
-    min-height: 120px;
-    white-space: pre-wrap;
-  }
-</style>
-</head>
-<body>
-<h1>🤖 Mini AI Buddy</h1>
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
-<input id="apiKey" type="password"
-       placeholder="Paste your Gemini API key">
+#define TFT_CS   5
+#define TFT_DC   4
+#define TFT_RST  2
+#define TFT_SCLK 14
+#define TFT_MOSI 13
 
-<button onclick="connectBLE()">1. Connect TFT</button>
-<button onclick="startListening()">2. Talk to Buddy 🎤</button>
+Adafruit_ST7735 tft(TFT_CS, TFT_DC, TFT_RST);
 
-<div id="log">Connect the TFT, then tap Talk.</div>
+// Nordic UART BLE service
+#define SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+#define RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+#define TX_UUID      "6e400003-b5a3-f393-e0a9-e50e"
 
-<script>
-const SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-const RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+BLECharacteristic *txCharacteristic;
 
-let characteristic = null;
-let history = [];
+String pendingMessage = "";
+volatile bool newMessage = false;
+String currentStatus = "READY";
 
-function log(text) {
-  document.getElementById("log").textContent = text;
+void drawRobot(String status) {
+  tft.fillScreen(ST77XX_BLACK);
+
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setCursor(30, 6);
+  tft.print("MINI AI BUDDY");
+
+  // Robot head
+  tft.drawRoundRect(20, 23, 120, 83, 12, ST77XX_CYAN);
+
+  // Eyes
+  tft.fillRoundRect(43, 43, 21, 25, 7, ST77XX_CYAN);
+  tft.fillRoundRect(96, 43, 21, 25, 7, ST77XX_CYAN);
+
+  // Smile
+  tft.drawLine(58, 83, 70, 90, ST77XX_WHITE);
+  tft.drawLine(70, 90, 90, 90, ST77XX_WHITE);
+  tft.drawLine(90, 90, 102, 83, ST77XX_WHITE);
+
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(5, 114);
+  tft.print(status);
 }
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+void showText(String text) {
+  tft.fillScreen(ST77XX_BLACK);
+
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setCursor(3, 3);
+  tft.println("MINI AI BUDDY");
+
+  tft.drawFastHLine(0, 15, 160, ST77XX_BLUE);
+
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(3, 23);
+
+  // Text is wrapped by the GFX library.
+  tft.println(text);
+
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(3, 119);
+  tft.print("BLE CONNECTED");
 }
 
-async function sendBLE(text) {
-  if (!characteristic) return;
+class RXCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) override {
+    String msg = characteristic->getValue().c_str();
 
-  // Keep each BLE write small for compatibility.
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.length > 20) {
-    throw new Error("BLE message is too long");
+    pendingMessage = msg;
+    newMessage = true;
   }
+};
 
-  await characteristic.writeValue(bytes);
-  await delay(100);
-}
+void setup() {
+  Serial.begin(115200);
 
-async function sendStatus(status) {
-  if (!characteristic) return;
-  await sendBLE("STATUS:" + status);
-}
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  tft.initR(INITR_BLACKTAB);
+  tft.setRotation(1);
 
-async function sendLines(text) {
-  if (!characteristic) return;
+  drawRobot("STARTING BLE");
 
-  const words = text.split(/\s+/);
-  let line = "";
+  BLEDevice::init("MiniAIBuddy");
 
-  for (const word of words) {
-    if ((line + " " + word).trim().length > 14) {
-      await sendBLE("LINE:" + line);
-      line = word;
-    } else {
-      line = (line + " " + word).trim();
-    }
-  }
+  BLEServer *server = BLEDevice::createServer();
+  BLEService *service = server->createService(SERVICE_UUID);
 
-  if (line) await sendBLE("LINE:" + line);
-}
-
-async function connectBLE() {
-  try {
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ name: "MiniAIBuddy" }],
-      optionalServices: [SERVICE]
-    });
-
-    const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(SERVICE);
-
-    characteristic =
-      await service.getCharacteristic(RX);
-
-    log("Connected to MiniAIBuddy!");
-    await sendStatus("READY");
-  } catch (e) {
-    log("Bluetooth error: " + e.message);
-  }
-}
-
-function startListening() {
-  const SpeechRecognition =
-    window.SpeechRecognition ||
-    window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    log("Speech recognition is unavailable in this browser.");
-    return;
-  }
-
-  if (!characteristic) {
-    log("Connect the TFT first.");
-    return;
-  }
-
-  const recognition = new SpeechRecognition();
-  recognition.lang = "en-IN";
-  recognition.continuous = false;
-  recognition.interimResults = false;
-
-  recognition.onstart = async () => {
-    log("Listening... Speak now.");
-    await sendStatus("LISTENING");
-  };
-
-  recognition.onerror = event => {
-    log("Microphone error: " + event.error);
-    sendStatus("READY");
-  };
-
-  recognition.onresult = async event => {
-    const question =
-      event.results[0][0].transcript;
-
-    log("You: " + question + "\n\nThinking...");
-    await sendStatus("THINKING");
-
-    try {
-      const answer = await askGemini(question);
-      log("You: " + question + "\n\nBuddy: " + answer);
-
-      await sendLines(answer);
-      await sendStatus("SPEAKING");
-
-      speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(answer);
-      utterance.lang = "en-IN";
-      utterance.rate = 1.0;
-
-      utterance.onend = () => sendStatus("READY");
-      speechSynthesis.speak(utterance);
-    } catch (e) {
-      log("AI error: " + e.message);
-      await sendStatus("READY");
-    }
-  };
-
-  recognition.start();
-}
-
-async function askGemini(question) {
-  const key = document.getElementById("apiKey").value.trim();
-
-  if (!key) {
-    throw new Error("Enter your Gemini API key first.");
-  }
-
-  const contents = [
-    ...history,
-    {
-      role: "user",
-      parts: [{
-        text:
-          "You are Mini AI Buddy, a friendly, cute robot companion. " +
-          "Reply conversationally in simple English, in no more than " +
-          "30 words. User says: " + question
-      }]
-    }
-  ];
-
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": key
-      },
-      body: JSON.stringify({
-        contents,
-        generationConfig: {
-          maxOutputTokens: 120,
-          temperature: 0.7
-        }
-      })
-    }
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message || "Gemini request failed."
+  BLECharacteristic *rxCharacteristic =
+    service->createCharacteristic(
+      RX_UUID,
+      BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_WRITE_NR
     );
+
+  txCharacteristic =
+    service->createCharacteristic(
+      TX_UUID,
+      BLECharacteristic::PROPERTY_NOTIFY
+    );
+
+  txCharacteristic->addDescriptor(new BLE2902());
+
+  rxCharacteristic->setCallbacks(new RXCallbacks());
+
+  service->start();
+
+  BLEAdvertising *advertising =
+    BLEDevice::getAdvertising();
+
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->start();
+
+  drawRobot("WAITING FOR PHONE");
+  Serial.println("BLE ready: MiniAIBuddy");
+}
+
+void loop() {
+  if (newMessage) {
+    newMessage = false;
+    String msg = pendingMessage;
+
+    Serial.println(msg);
+
+    if (msg == "STATUS:LISTENING") {
+      drawRobot("LISTENING...");
+    }
+    else if (msg == "STATUS:THINKING") {
+      drawRobot("THINKING...");
+    }
+    else if (msg == "STATUS:SPEAKING") {
+      drawRobot("SPEAKING...");
+    }
+    else if (msg == "STATUS:READY") {
+      drawRobot("READY");
+    }
+    else if (msg.startsWith("LINE:")) {
+      showText(msg.substring(5));
+    }
   }
 
-  const answer =
-    data.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("")
-      .trim();
-
-  if (!answer) throw new Error("No text returned by Gemini.");
-
-  history.push(
-    { role: "user", parts: [{ text: question }] },
-    { role: "model", parts: [{ text: answer }] }
-  );
-
-  if (history.length > 8) history = history.slice(-8);
-
-  return answer;
+  delay(10);
 }
-</script>
-</body>
-</html>
